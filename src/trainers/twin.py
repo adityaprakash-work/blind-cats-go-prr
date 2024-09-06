@@ -58,15 +58,6 @@ class Trainer1:
             dataformats="NCHW",
         )
 
-    @staticmethod
-    def _log_avg_eval_output(engine, engine2, tb_logger):
-        for key, value in engine.state.output.items():
-            tb_logger.writer.add_scalar(
-                f"Validation/{key}",
-                value,
-                engine2.state.epoch,
-            )
-
     def _train_step(self, engine, batch):
         for param in self.eeg_enc.parameters():
             param.requires_grad = not self.freeze_eeg_enc
@@ -206,18 +197,27 @@ class Trainer1:
             },
         )
 
-        evaluator.add_event_handler(
-            Events.EPOCH_COMPLETED,
-            self._log_avg_eval_output,
-            trainer,
-            tb_logger,
-        )
-
         @trainer.on(Events.EPOCH_COMPLETED)
         def run_evaluator(engine):
-            evaluator.run(self.val_loader, max_epochs=1)
+            avmetrics = {key: [] for key in engine.state.output.keys()}
+            for batch in self.val_loader:
+                eeg, img = batch
+                eeg = eeg.to(self.device)
+                img = img.to(self.device)
+                batch_metrics = self._eval_step(engine, (eeg, img))
+                for key, value in batch_metrics.items():
+                    avmetrics[key].append(value)
+            avmetrics = {
+                key: sum(value) / len(value) for key, value in avmetrics.items()
+            }
+            tb_logger.writer.add_scalars(
+                "validation",
+                avmetrics,
+                trainer.state.epoch,
+            )
 
         trainer.run(self.trn_loader, max_epochs=max_epochs)
+
         return {
             "eeg_enc": self.eeg_enc,
             "img_enc": self.img_enc,
