@@ -44,7 +44,8 @@ class Trainer1:
         )
 
     def _log_images(self, engine, tb_logger, set_name):
-        eeg, img = next(iter(self.val_loader))
+        loader = self.trn_loader if set_name == "Training" else self.val_loader
+        eeg, img = next(iter(self.loader))
         eeg = eeg.to(self.device)
         img = img.to(self.device)
         eeg_emb = self.eeg_enc(eeg)
@@ -166,13 +167,6 @@ class Trainer1:
             "Training",
         )
 
-        evaluator.add_event_handler(
-            Events.EPOCH_COMPLETED,
-            self._log_images,
-            tb_logger,
-            "Validation",
-        )
-
         @trainer.on(Events.ITERATION_COMPLETED)
         def log_lambda_wt(engine):
             tb_logger.writer.add_scalar(
@@ -210,11 +204,12 @@ class Trainer1:
             avmetrics = {
                 key: sum(value) / len(value) for key, value in avmetrics.items()
             }
-            tb_logger.writer.add_scalars(
-                "validation",
-                avmetrics,
-                trainer.state.epoch,
-            )
+            for key, value in avmetrics.items():
+                tb_logger.writer.add_scalar(
+                    f"validation/{key}", value, engine.state.iteration
+                )
+
+            self._log_images(engine, tb_logger, "Validation")
 
         trainer.run(self.trn_loader, max_epochs=max_epochs)
 
