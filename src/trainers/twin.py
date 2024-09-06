@@ -19,7 +19,7 @@ class Trainer1:
         lat_dec,
         trn_loader,
         val_loader=None,
-        freeze_eeg_enc=False,
+        freeze_eeg_enc=True,
         freeze_img_enc=False,
         freeze_lat_dec=False,
         num_scales=3,
@@ -35,7 +35,7 @@ class Trainer1:
         self.freeze_lat_dec = freeze_lat_dec
         self.num_scales = num_scales
         self.device = device
-        self.lambda_wt = nn.Parameter(torch.tensor(1.0))
+        self.lambda_wt = nn.Parameter(torch.tensor(0.0))
         self.optimizer = Adam(
             list(eeg_enc.parameters())
             + list(img_enc.parameters())
@@ -141,8 +141,9 @@ class Trainer1:
     def fire(
         self,
         max_epochs=100,
-        log_rec_interval=2,
+        log_rec_interval=16,
         log_dir="logs",
+        branch_switch_interval=128,
     ):
         trainer = Engine(self._train_step)
         evaluator = Engine(self._eval_step)
@@ -168,10 +169,39 @@ class Trainer1:
         )
 
         @trainer.on(Events.ITERATION_COMPLETED)
-        def log_lambda_wt(engine):
+        def _log_lambda_wt(engine):
             tb_logger.writer.add_scalar(
                 "Lambda", self.lambda_wt.item(), engine.state.iteration
             )
+
+        @trainer.on(Events.EPOCH_COMPLETED)
+        def _run_evaluator(engine):
+            avmetrics = {key: [] for key in engine.state.output.keys()}
+            for batch in self.val_loader:
+                eeg, img = batch
+                eeg = eeg.to(self.device)
+                img = img.to(self.device)
+                batch_metrics = self._eval_step(engine, (eeg, img))
+                for key, value in batch_metrics.items():
+                    avmetrics[key].append(value)
+            avmetrics = {
+                key: sum(value) / len(value) for key, value in avmetrics.items()
+            }
+            for key, value in avmetrics.items():
+                tb_logger.writer.add_scalar(
+                    f"validation/{key}", value, engine.state.iteration
+                )
+
+            self._log_images(engine, tb_logger, "Validation")
+
+        @trainer.on(Events.ITERATION_COMPLETED(every=branch_switch_interval))
+        def _switch_branch(engine):
+            if self.freeze_eeg_enc is True:
+                self.freeze_eeg_enc = False
+                self.freeze_img_enc = True
+            else:
+                self.freeze_eeg_enc = True
+                self.freeze_img_enc = False
 
         checkpoint_handler = ModelCheckpoint(
             log_dir,
@@ -190,26 +220,6 @@ class Trainer1:
                 "optimizer": self.optimizer,
             },
         )
-
-        @trainer.on(Events.EPOCH_COMPLETED)
-        def run_evaluator(engine):
-            avmetrics = {key: [] for key in engine.state.output.keys()}
-            for batch in self.val_loader:
-                eeg, img = batch
-                eeg = eeg.to(self.device)
-                img = img.to(self.device)
-                batch_metrics = self._eval_step(engine, (eeg, img))
-                for key, value in batch_metrics.items():
-                    avmetrics[key].append(value)
-            avmetrics = {
-                key: sum(value) / len(value) for key, value in avmetrics.items()
-            }
-            for key, value in avmetrics.items():
-                tb_logger.writer.add_scalar(
-                    f"validation/{key}", value, engine.state.iteration
-                )
-
-            self._log_images(engine, tb_logger, "Validation")
 
         trainer.run(self.trn_loader, max_epochs=max_epochs)
 
