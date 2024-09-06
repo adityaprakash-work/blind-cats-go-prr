@@ -5,7 +5,6 @@ from torch.optim import Adam
 from ignite.engine import Engine, Events
 from ignite.handlers import (
     ModelCheckpoint,
-    EarlyStopping,
     TensorboardLogger,
     ProgressBar,
 )
@@ -44,6 +43,30 @@ class Trainer1:
             + [self.lambda_wt],
         )
 
+    def _log_images(self, engine, tb_logger, set_name):
+        eeg, img = next(iter(self.val_loader))
+        eeg = eeg.to(self.device)
+        img = img.to(self.device)
+        eeg_emb = self.eeg_enc(eeg)
+        _ = self.img_enc(img)
+        p_img = self.lat_dec(eeg_emb)
+        img_grid = torch.cat((img, p_img), dim=3)
+        tb_logger.writer.add_image(
+            f"{set_name} Set Reconstruction",
+            img_grid[:3],
+            engine.state.iteration,
+            dataformats="NCHW",
+        )
+
+    @staticmethod
+    def _log_avg_eval_output(engine, engine2, tb_logger):
+        for key, value in engine.state.output.items():
+            tb_logger.writer.add_scalar(
+                f"Validation/{key}",
+                value,
+                engine2.state.epoch,
+            )
+
     def _train_step(self, engine, batch):
         for param in self.eeg_enc.parameters():
             param.requires_grad = not self.freeze_eeg_enc
@@ -65,15 +88,17 @@ class Trainer1:
         _rec_scl_loss = {}
         for i in range(self.num_scales):
             sf = 0.5**i
+            nf = (img.shape[-1] * img.shape[-2]) * sf**2
             if i == 0:
-                _rec_scl_loss[f"rec_scl_loss{sf}"] = F.mse_loss(p_img, img)
-
+                _rec_scl_loss[f"rec_scl_loss{sf}"] = F.mse_loss(p_img, img) / nf
             else:
                 term = F.mse_loss(
                     F.interpolate(p_img, scale_factor=sf, mode="bilinear"),
                     F.interpolate(img, scale_factor=sf, mode="bilinear"),
                 )
-                _rec_scl_loss[f"rec_scl_loss{sf}"] = term / sf
+                _rec_scl_loss[f"rec_scl_loss{sf}"] = term / nf
+        # NOTE: The coefficients can be in some other patterns also right now
+        # weights of all scales are equal.
         rec_scl_loss = sum(_rec_scl_loss.values()) / len(_rec_scl_loss)
         # NOTE: Both losses are combined with a weighted sum
         lamb = torch.clamp(self.lambda_wt, 0.1, 0.9)
@@ -102,15 +127,15 @@ class Trainer1:
             _rec_scl_loss = {}
             for i in range(self.num_scales):
                 sf = 0.5**i
+                nf = (img.shape[-1] * img.shape[-2]) * sf**2
                 if i == 0:
-                    _rec_scl_loss[f"rec_scl_loss{sf}"] = F.mse_loss(p_img, img)
-
+                    _rec_scl_loss[f"rec_scl_loss{sf}"] = F.mse_loss(p_img, img) / nf
                 else:
                     term = F.mse_loss(
                         F.interpolate(p_img, scale_factor=sf, mode="bilinear"),
                         F.interpolate(img, scale_factor=sf, mode="bilinear"),
                     )
-                    _rec_scl_loss[f"rec_scl_loss{sf}"] = term / sf
+                    _rec_scl_loss[f"rec_scl_loss{sf}"] = term / nf
             rec_scl_loss = sum(_rec_scl_loss.values()) / len(_rec_scl_loss)
             lamb = torch.clamp(self.lambda_wt, 0.1, 0.9)
             loss = lamb * cos_sim_loss + (1 - lamb) * rec_scl_loss
@@ -121,12 +146,18 @@ class Trainer1:
                 **{key: value.item() for key, value in _rec_scl_loss.items()},
             }
 
-    def fire(self, max_epochs=100, patience=10, k=2, log_dir="logs"):
+    def fire(
+        self,
+        max_epochs=100,
+        log_rec_interval=2,
+        log_dir="logs",
+    ):
         trainer = Engine(self._train_step)
         evaluator = Engine(self._eval_step)
-        pbar = ProgressBar()
-        pbar.attach(trainer)
-        pbar.attach(evaluator)
+        tpbar = ProgressBar()
+        epbar = ProgressBar()
+        tpbar.attach(trainer)
+        epbar.attach(evaluator)
         tb_logger = TensorboardLogger(log_dir)
         tb_logger.attach(
             trainer,
@@ -136,30 +167,20 @@ class Trainer1:
             ),
             event_name=Events.ITERATION_COMPLETED,
         )
-        tb_logger.attach(
-            evaluator,
-            log_handler=OutputHandler(
-                tag="validation",
-                output_transform=lambda x: x,
-            ),
-            event_name=Events.ITERATION_COMPLETED,
+
+        trainer.add_event_handler(
+            Events.ITERATION_COMPLETED(every=log_rec_interval),
+            self._log_images,
+            tb_logger,
+            "Training",
         )
 
-        @trainer.on(Events.ITERATION_COMPLETED(every=k))
-        def log_images(engine):
-            eeg, img = next(iter(self.val_loader))
-            eeg = eeg.to(self.device)
-            img = img.to(self.device)
-            eeg_emb = self.eeg_enc(eeg)
-            _ = self.img_enc(img)
-            p_img = self.lat_dec(eeg_emb)
-            img_grid = torch.cat((img, p_img), dim=3)
-            tb_logger.writer.add_image(
-                "Reconstructions",
-                img_grid[:3],
-                engine.state.iteration,
-                dataformats="NCHW",
-            )
+        evaluator.add_event_handler(
+            Events.EPOCH_COMPLETED,
+            self._log_images,
+            tb_logger,
+            "Validation",
+        )
 
         @trainer.on(Events.ITERATION_COMPLETED)
         def log_lambda_wt(engine):
@@ -168,9 +189,13 @@ class Trainer1:
             )
 
         checkpoint_handler = ModelCheckpoint(
-            log_dir, "twin", n_saved=10, require_empty=False
+            log_dir,
+            n_saved=10,
+            require_empty=False,
+            score_function=lambda engine: -engine.state.output["loss"],
         )
-        trainer.add_event_handler(
+
+        evaluator.add_event_handler(
             Events.EPOCH_COMPLETED,
             checkpoint_handler,
             {
@@ -180,16 +205,18 @@ class Trainer1:
                 "optimizer": self.optimizer,
             },
         )
-        early_stopping_handler = EarlyStopping(
-            patience=patience,
-            score_function=lambda engine: -engine.state.metrics["loss"],
-            trainer=trainer,
-        )
+
         evaluator.add_event_handler(
-            Events.COMPLETED,
-            early_stopping_handler,
+            Events.EPOCH_COMPLETED,
+            self._log_avg_eval_output,
             trainer,
+            tb_logger,
         )
+
+        @trainer.on(Events.EPOCH_COMPLETED)
+        def run_evaluator(engine):
+            evaluator.run(self.val_loader, max_epochs=1)
+
         trainer.run(self.trn_loader, max_epochs=max_epochs)
         return {
             "eeg_enc": self.eeg_enc,
