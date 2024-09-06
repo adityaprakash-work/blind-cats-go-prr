@@ -9,6 +9,7 @@ from ignite.handlers import (
     TensorboardLogger,
     ProgressBar,
 )
+from ignite.contrib.handlers.tensorboard_logger import OutputHandler
 
 
 class Trainer1:
@@ -40,7 +41,7 @@ class Trainer1:
             list(eeg_enc.parameters())
             + list(img_enc.parameters())
             + list(lat_dec.parameters())
-            + list(self.lambda_wt),
+            + [self.lambda_wt],
         )
 
     def _train_step(self, engine, batch):
@@ -74,7 +75,7 @@ class Trainer1:
                 )
                 _rec_scl_loss[f"rec_scl_loss{sf}"] = term / sf
         rec_scl_loss = sum(_rec_scl_loss.values()) / len(_rec_scl_loss)
-        # NOTE: Need to multiply by empirical values to normalize both losses.
+        # NOTE: Both losses are combined with a weighted sum
         lamb = torch.clamp(self.lambda_wt, 0.1, 0.9)
         loss = lamb * cos_sim_loss + (1 - lamb) * rec_scl_loss
         loss.backward()
@@ -83,7 +84,7 @@ class Trainer1:
             "cos_sim_loss": cos_sim_loss.item(),
             "rec_scl_loss": rec_scl_loss.item(),
             "loss": loss.item(),
-            **_rec_scl_loss,
+            **{key: value.item() for key, value in _rec_scl_loss.items()},
         }
 
     def _eval_step(self, engine, batch):
@@ -117,18 +118,32 @@ class Trainer1:
                 "cos_sim_loss": cos_sim_loss.item(),
                 "rec_scl_loss": rec_scl_loss.item(),
                 "loss": loss.item(),
-                **_rec_scl_loss,
+                **{key: value.item() for key, value in _rec_scl_loss.items()},
             }
 
-    def train(self, max_epochs=100, patience=10, k=28, log_dir="logs"):
+    def fire(self, max_epochs=100, patience=10, k=2, log_dir="logs"):
         trainer = Engine(self._train_step)
         evaluator = Engine(self._eval_step)
         pbar = ProgressBar()
         pbar.attach(trainer)
         pbar.attach(evaluator)
         tb_logger = TensorboardLogger(log_dir)
-        tb_logger.attach(trainer)
-        tb_logger.attach(evaluator)
+        tb_logger.attach(
+            trainer,
+            log_handler=OutputHandler(
+                tag="training",
+                output_transform=lambda x: x,
+            ),
+            event_name=Events.ITERATION_COMPLETED,
+        )
+        tb_logger.attach(
+            evaluator,
+            log_handler=OutputHandler(
+                tag="validation",
+                output_transform=lambda x: x,
+            ),
+            event_name=Events.ITERATION_COMPLETED,
+        )
 
         @trainer.on(Events.ITERATION_COMPLETED(every=k))
         def log_images(engine):
@@ -141,7 +156,7 @@ class Trainer1:
             img_grid = torch.cat((img, p_img), dim=3)
             tb_logger.writer.add_image(
                 "Reconstructions",
-                img_grid[0],
+                img_grid[:3],
                 engine.state.iteration,
                 dataformats="NCHW",
             )
@@ -153,7 +168,7 @@ class Trainer1:
             )
 
         checkpoint_handler = ModelCheckpoint(
-            log_dir, "twin", save_interval=1, n_saved=10, require_empty=False
+            log_dir, "twin", n_saved=10, require_empty=False
         )
         trainer.add_event_handler(
             Events.EPOCH_COMPLETED,
@@ -162,11 +177,13 @@ class Trainer1:
                 "eeg_enc": self.eeg_enc,
                 "img_enc": self.img_enc,
                 "lat_dec": self.lat_dec,
+                "optimizer": self.optimizer,
             },
         )
         early_stopping_handler = EarlyStopping(
             patience=patience,
             score_function=lambda engine: -engine.state.metrics["loss"],
+            trainer=trainer,
         )
         evaluator.add_event_handler(
             Events.COMPLETED,
