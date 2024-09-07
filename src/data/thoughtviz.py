@@ -27,11 +27,10 @@ class ThoughtVizDepthBasic(Dataset):
     def __getitem__(self, idx):
         eeg = self.data["dataset"][idx]["eeg"]
         eeg = eeg[:, 20:470]
-        grp = (eeg, self.cein)
         img_idx = self.data["dataset"][idx]["image"]
         img_name = self.data["images"][img_idx]
         cls_name = img_name.split("_")[0]
         img_path = self.imagenet_dir / cls_name / f"{img_name}.{self.ext}"
         img = cv2.imread(str(img_path), cv2.IMREAD_GRAYSCALE)
         img = img / 255.0
-        return grp, img
+        return eeg, self.cein, img
