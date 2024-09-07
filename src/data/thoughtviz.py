@@ -5,7 +5,12 @@ from pathlib import Path
 
 
 class ThoughtVizDepthBasic(Dataset):
-    def __init__(self, data_pth: Path | str, imagenet_dir: Path | str):
+    def __init__(
+        self,
+        data_pth: Path | str,
+        imagenet_dir: Path | str,
+        ext: str = "JPEG",
+    ):
         self.data_pth = Path(data_pth)
         self.imagenet_dir = Path(imagenet_dir)
         self.data = pt.load(data_pth, weights_only=False)
@@ -25,7 +30,7 @@ class ThoughtVizDepthBasic(Dataset):
         img_idx = self.data["dataset"][idx]["image"]
         img_name = self.data["images"][img_idx]
         cls_name = img_name.split("_")[0]
-        img_path = self.imagenet_dir / cls_name / f"{img_name}.jpg"
+        img_path = self.imagenet_dir / cls_name / f"{img_name}.{self.ext}"
         img = cv2.imread(str(img_path), cv2.IMREAD_GRAYSCALE)
         img = img / 255.0
         return grp, img
