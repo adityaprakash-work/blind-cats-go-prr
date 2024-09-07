@@ -38,7 +38,7 @@ class Trainer1:
         self.freeze_lat_dec = freeze_lat_dec
         self.num_scales = num_scales
         self.device = device
-        self.lambda_wt = nn.Parameter(torch.tensor(0.0))
+        self.lambda_wt = nn.Parameter(torch.tensor(0.1), requires_grad=True)
         self.lambda_wt.to(device)
         self.lambda_wt.float()
         self.optimizer = Adam(
@@ -50,14 +50,15 @@ class Trainer1:
 
     def _log_images(self, engine, tb_logger, set_name):
         loader = self.trn_loader if set_name == "Training" else self.val_loader
-        eeg, ein, img = next(iter(self.loader))
+        eeg, ein, img = next(iter(loader))
         eeg = eeg.to(self.device).float()
         ein = ein.to(self.device).int()
         img = img.to(self.device).float()
         eeg_emb = self.eeg_enc(eeg)
-        _ = self.img_enc(img)
-        p_img = self.lat_dec(eeg_emb)
-        img_grid = torch.cat((img, p_img), dim=3)
+        img_emb = self.img_enc(img)
+        p_img_e = self.lat_dec(eeg_emb)
+        p_img_i = self.lat_dec(img_emb)
+        img_grid = torch.cat((img, p_img_i, p_img_e), dim=3)
         img_grid = img_grid.clamp(0, 1).detach().cpu()
         tb_logger.writer.add_image(
             f"{set_name} Set Reconstruction",
@@ -104,10 +105,11 @@ class Trainer1:
         # weights of all scales are equal.
         rec_scl_loss = sum(_rec_scl_loss.values()) / len(_rec_scl_loss)
         # NOTE: Both losses are combined with a weighted sum
-        lamb = torch.clamp(self.lambda_wt, 0.1, 0.9)
+        lamb = self.lambda_wt
         loss = lamb * cos_sim_loss + 2 * (1 - lamb) * rec_scl_loss
         loss.backward()
         self.optimizer.step()
+        self.lambda_wt.data.clamp_(0.1, 0.9)
         return {
             "cos_sim_loss": cos_sim_loss.item(),
             "rec_scl_loss": rec_scl_loss.item(),
@@ -141,7 +143,7 @@ class Trainer1:
                     )
                     _rec_scl_loss[f"rec_scl_loss{sf}"] = term / nf
             rec_scl_loss = sum(_rec_scl_loss.values()) / len(_rec_scl_loss)
-            lamb = torch.clamp(self.lambda_wt, 0.1, 0.9)
+            lamb = self.lambda_wt
             loss = lamb * cos_sim_loss + 2 * (1 - lamb) * rec_scl_loss
             return {
                 "cos_sim_loss": cos_sim_loss.item(),
