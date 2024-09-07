@@ -33,4 +33,5 @@ class ThoughtVizDepthBasic(Dataset):
         img_path = self.imagenet_dir / cls_name / f"{img_name}.{self.ext}"
         img = cv2.imread(str(img_path), cv2.IMREAD_GRAYSCALE)
         img = img / 255.0
+        img = img[None, ...]
         return eeg, self.cein, img

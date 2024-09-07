@@ -79,17 +79,14 @@ class Trainer1:
         self.optimizer.zero_grad()
         eeg, ein, img = batch
         eeg = eeg.to(self.device).float()
-        print(eeg.shape)
         ein = ein.to(self.device).int()
-        print(ein.shape)
         img = img.to(self.device).float()
-        print(img.shape)
         eeg_emb = self.eeg_enc(eeg, ein)
-        print(eeg_emb.shape)
         img_emb = self.img_enc(img)
-        print(img_emb.shape)
-        p_img = self.lat_dec(eeg_emb)
-        print(p_img.shape)
+        if self.freeze_eeg_enc is True:
+            p_img = self.lat_dec(img_emb)
+        else:
+            p_img = self.lat_dec(eeg_emb)
         cos_sim_loss = 1 - F.cosine_similarity(eeg_emb, img_emb).mean()
         _rec_scl_loss = {}
         for i in range(self.num_scales):
