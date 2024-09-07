@@ -38,7 +38,7 @@ class Trainer1:
         self.freeze_lat_dec = freeze_lat_dec
         self.num_scales = num_scales
         self.device = device
-        self.lambda_wt = nn.Parameter(torch.tensor(0.1), requires_grad=True)
+        self.lambda_wt = nn.Parameter(torch.tensor(0.3), requires_grad=True)
         self.lambda_wt.to(device)
         self.lambda_wt.float()
         self.optimizer = Adam(
