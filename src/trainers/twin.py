@@ -54,7 +54,7 @@ class Trainer1:
         eeg = eeg.to(self.device).float()
         ein = ein.to(self.device).int()
         img = img.to(self.device).float()
-        eeg_emb = self.eeg_enc(eeg)
+        eeg_emb = self.eeg_enc(eeg, ein)
         img_emb = self.img_enc(img)
         p_img_e = self.lat_dec(eeg_emb)
         p_img_i = self.lat_dec(img_emb)
@@ -92,15 +92,13 @@ class Trainer1:
         _rec_scl_loss = {}
         for i in range(self.num_scales):
             sf = 0.5**i
-            nf = (img.shape[-1] * img.shape[-2]) * sf**2
             if i == 0:
-                _rec_scl_loss[f"rec_scl_loss{sf}"] = F.mse_loss(p_img, img) / nf
+                _rec_scl_loss[f"rec_scl_loss{sf}"] = F.mse_loss(p_img, img)
             else:
-                term = F.mse_loss(
+                _rec_scl_loss[f"rec_scl_loss{sf}"] = F.mse_loss(
                     F.interpolate(p_img, scale_factor=sf, mode="bilinear"),
                     F.interpolate(img, scale_factor=sf, mode="bilinear"),
                 )
-                _rec_scl_loss[f"rec_scl_loss{sf}"] = term / nf
         # NOTE: The coefficients can be in some other patterns also right now
         # weights of all scales are equal.
         rec_scl_loss = sum(_rec_scl_loss.values()) / len(_rec_scl_loss)
@@ -133,15 +131,13 @@ class Trainer1:
             _rec_scl_loss = {}
             for i in range(self.num_scales):
                 sf = 0.5**i
-                nf = (img.shape[-1] * img.shape[-2]) * sf**2
                 if i == 0:
-                    _rec_scl_loss[f"rec_scl_loss{sf}"] = F.mse_loss(p_img, img) / nf
+                    _rec_scl_loss[f"rec_scl_loss{sf}"] = F.mse_loss(p_img, img)
                 else:
-                    term = F.mse_loss(
+                    _rec_scl_loss[f"rec_scl_loss{sf}"] = F.mse_loss(
                         F.interpolate(p_img, scale_factor=sf, mode="bilinear"),
                         F.interpolate(img, scale_factor=sf, mode="bilinear"),
                     )
-                    _rec_scl_loss[f"rec_scl_loss{sf}"] = term / nf
             rec_scl_loss = sum(_rec_scl_loss.values()) / len(_rec_scl_loss)
             lamb = self.lambda_wt
             loss = lamb * cos_sim_loss + 2 * (1 - lamb) * rec_scl_loss
