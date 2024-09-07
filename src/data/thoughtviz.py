@@ -22,7 +22,7 @@ class ThoughtVizDepthBasic(Dataset):
         self.cein = pt.stack([row, col], dim=0)
 
     def __len__(self):
-        return len(self.data)
+        return len(self.data["dataset"])
 
     def __getitem__(self, idx):
         eeg = self.data["dataset"][idx]["eeg"]

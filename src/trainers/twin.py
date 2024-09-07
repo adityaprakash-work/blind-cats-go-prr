@@ -36,6 +36,7 @@ class Trainer1:
         self.num_scales = num_scales
         self.device = device
         self.lambda_wt = nn.Parameter(torch.tensor(0.0))
+        self.lambda_wt.to(self.device)
         self.optimizer = Adam(
             list(eeg_enc.parameters())
             + list(img_enc.parameters())
@@ -52,6 +53,7 @@ class Trainer1:
         _ = self.img_enc(img)
         p_img = self.lat_dec(eeg_emb)
         img_grid = torch.cat((img, p_img), dim=3)
+        img_grid = img_grid.clamp(0, 1).to("cpu")
         tb_logger.writer.add_image(
             f"{set_name} Set Reconstruction",
             img_grid[:3],
