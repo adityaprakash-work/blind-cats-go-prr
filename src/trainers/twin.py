@@ -78,7 +78,7 @@ class Trainer1:
         self.optimizer.zero_grad()
         eeg, ein, img = batch
         eeg = eeg.to(self.device).float()
-        ein = ein.to(self.device).float()
+        ein = ein.to(self.device).int()
         img = img.to(self.device).float()
         eeg_emb = self.eeg_enc(eeg, ein)
         img_emb = self.img_enc(img)
@@ -118,7 +118,7 @@ class Trainer1:
         with torch.no_grad():
             eeg, ein, img = batch
             eeg = eeg.to(self.device).float()
-            ein = ein.to(self.device).float()
+            ein = ein.to(self.device).int()
             img = img.to(self.device).float()
             eeg_emb = self.eeg_enc(eeg, ein)
             img_emb = self.img_enc(img)
