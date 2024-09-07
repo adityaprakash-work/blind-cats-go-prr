@@ -70,10 +70,11 @@ class Trainer1:
         self.img_enc.train()
         self.lat_dec.train()
         self.optimizer.zero_grad()
-        eeg, img = batch
+        eeg, ein, img = batch
         eeg = eeg.to(self.device)
+        ein = ein.to(self.device)
         img = img.to(self.device)
-        eeg_emb = self.eeg_enc(eeg)
+        eeg_emb = self.eeg_enc(eeg, ein)
         img_emb = self.img_enc(img)
         p_img = self.lat_dec(eeg_emb)
         cos_sim_loss = 1 - F.cosine_similarity(eeg_emb, img_emb).mean()
@@ -94,7 +95,7 @@ class Trainer1:
         rec_scl_loss = sum(_rec_scl_loss.values()) / len(_rec_scl_loss)
         # NOTE: Both losses are combined with a weighted sum
         lamb = torch.clamp(self.lambda_wt, 0.1, 0.9)
-        loss = lamb * cos_sim_loss + (1 - lamb) * rec_scl_loss
+        loss = lamb * cos_sim_loss + 2 * (1 - lamb) * rec_scl_loss
         loss.backward()
         self.optimizer.step()
         return {
@@ -109,10 +110,11 @@ class Trainer1:
         self.img_enc.eval()
         self.lat_dec.eval()
         with torch.no_grad():
-            eeg, img = batch
+            eeg, ein, img = batch
             eeg = eeg.to(self.device)
+            ein = ein.to(self.device)
             img = img.to(self.device)
-            eeg_emb = self.eeg_enc(eeg)
+            eeg_emb = self.eeg_enc(eeg, ein)
             img_emb = self.img_enc(img)
             p_img = self.lat_dec(eeg_emb)
             cos_sim_loss = 1 - F.cosine_similarity(eeg_emb, img_emb).mean()
@@ -130,7 +132,7 @@ class Trainer1:
                     _rec_scl_loss[f"rec_scl_loss{sf}"] = term / nf
             rec_scl_loss = sum(_rec_scl_loss.values()) / len(_rec_scl_loss)
             lamb = torch.clamp(self.lambda_wt, 0.1, 0.9)
-            loss = lamb * cos_sim_loss + (1 - lamb) * rec_scl_loss
+            loss = lamb * cos_sim_loss + 2 * (1 - lamb) * rec_scl_loss
             return {
                 "cos_sim_loss": cos_sim_loss.item(),
                 "rec_scl_loss": rec_scl_loss.item(),
