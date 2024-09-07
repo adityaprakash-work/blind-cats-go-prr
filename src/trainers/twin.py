@@ -50,14 +50,15 @@ class Trainer1:
 
     def _log_images(self, engine, tb_logger, set_name):
         loader = self.trn_loader if set_name == "Training" else self.val_loader
-        eeg, img = next(iter(self.loader))
-        eeg = eeg.to(self.device)
-        img = img.to(self.device)
+        eeg, ein, img = next(iter(self.loader))
+        eeg = eeg.to(self.device).float()
+        ein = ein.to(self.device).int()
+        img = img.to(self.device).float()
         eeg_emb = self.eeg_enc(eeg)
         _ = self.img_enc(img)
         p_img = self.lat_dec(eeg_emb)
         img_grid = torch.cat((img, p_img), dim=3)
-        img_grid = img_grid.clamp(0, 1).to("cpu")
+        img_grid = img_grid.clamp(0, 1).detach().cpu()
         tb_logger.writer.add_image(
             f"{set_name} Set Reconstruction",
             img_grid[:3],
@@ -78,11 +79,17 @@ class Trainer1:
         self.optimizer.zero_grad()
         eeg, ein, img = batch
         eeg = eeg.to(self.device).float()
+        print(eeg.shape)
         ein = ein.to(self.device).int()
+        print(ein.shape)
         img = img.to(self.device).float()
+        print(img.shape)
         eeg_emb = self.eeg_enc(eeg, ein)
+        print(eeg_emb.shape)
         img_emb = self.img_enc(img)
+        print(img_emb.shape)
         p_img = self.lat_dec(eeg_emb)
+        print(p_img.shape)
         cos_sim_loss = 1 - F.cosine_similarity(eeg_emb, img_emb).mean()
         _rec_scl_loss = {}
         for i in range(self.num_scales):
@@ -186,10 +193,11 @@ class Trainer1:
         def _run_evaluator(engine):
             avmetrics = {key: [] for key in engine.state.output.keys()}
             for batch in self.val_loader:
-                eeg, img = batch
-                eeg = eeg.to(self.device)
-                img = img.to(self.device)
-                batch_metrics = self._eval_step(engine, (eeg, img))
+                eeg, ein, img = batch
+                eeg = eeg.to(self.device).float()
+                ein = ein.to(self.device).int()
+                img = img.to(self.device).float()
+                batch_metrics = self._eval_step(engine, (eeg, ein, img))
                 for key, value in batch_metrics.items():
                     avmetrics[key].append(value)
             avmetrics = {
