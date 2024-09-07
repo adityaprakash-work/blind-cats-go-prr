@@ -13,6 +13,7 @@ class ThoughtVizDepthBasic(Dataset):
     ):
         self.data_pth = Path(data_pth)
         self.imagenet_dir = Path(imagenet_dir)
+        self.ext = ext
         self.data = pt.load(data_pth, weights_only=False)
         self.cein = None
         x = self.data["dataset"][0]["eeg"]
