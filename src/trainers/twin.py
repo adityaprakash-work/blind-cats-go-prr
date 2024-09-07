@@ -25,9 +25,12 @@ class Trainer1:
         num_scales=3,
         device="cpu",
     ):
-        self.eeg_enc = eeg_enc
-        self.img_enc = img_enc
-        self.lat_dec = lat_dec
+        self.eeg_enc = eeg_enc.to(device)
+        self.img_enc = img_enc.to(device)
+        self.lat_dec = lat_dec.to(device)
+        self.eeg_enc.float()
+        self.img_enc.float()
+        self.lat_dec.float()
         self.trn_loader = trn_loader
         self.val_loader = val_loader
         self.freeze_eeg_enc = freeze_eeg_enc
@@ -36,7 +39,8 @@ class Trainer1:
         self.num_scales = num_scales
         self.device = device
         self.lambda_wt = nn.Parameter(torch.tensor(0.0))
-        self.lambda_wt.to(self.device)
+        self.lambda_wt.to(device)
+        self.lambda_wt.float()
         self.optimizer = Adam(
             list(eeg_enc.parameters())
             + list(img_enc.parameters())
@@ -73,9 +77,9 @@ class Trainer1:
         self.lat_dec.train()
         self.optimizer.zero_grad()
         eeg, ein, img = batch
-        eeg = eeg.to(self.device)
-        ein = ein.to(self.device)
-        img = img.to(self.device)
+        eeg = eeg.to(self.device).float()
+        ein = ein.to(self.device).float()
+        img = img.to(self.device).float()
         eeg_emb = self.eeg_enc(eeg, ein)
         img_emb = self.img_enc(img)
         p_img = self.lat_dec(eeg_emb)
@@ -113,9 +117,9 @@ class Trainer1:
         self.lat_dec.eval()
         with torch.no_grad():
             eeg, ein, img = batch
-            eeg = eeg.to(self.device)
-            ein = ein.to(self.device)
-            img = img.to(self.device)
+            eeg = eeg.to(self.device).float()
+            ein = ein.to(self.device).float()
+            img = img.to(self.device).float()
             eeg_emb = self.eeg_enc(eeg, ein)
             img_emb = self.img_enc(img)
             p_img = self.lat_dec(eeg_emb)
