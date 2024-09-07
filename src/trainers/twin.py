@@ -1,3 +1,4 @@
+import math
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -38,15 +39,9 @@ class Trainer1:
         self.freeze_lat_dec = freeze_lat_dec
         self.num_scales = num_scales
         self.device = device
-        self.lambda_wt = nn.Parameter(torch.tensor(0.3), requires_grad=True)
-        self.lambda_wt.to(device)
-        self.lambda_wt.float()
-        self.optimizer = Adam(
-            list(eeg_enc.parameters())
-            + list(img_enc.parameters())
-            + list(lat_dec.parameters())
-            + [self.lambda_wt],
-        )
+        self.ope = Adam(list(eeg_enc.parameters()) + list(lat_dec.parameters()))
+        self.opi = Adam(list(img_enc.parameters()) + list(lat_dec.parameters()))
+        self.fbsi = None
 
     def _log_images(self, engine, tb_logger, set_name):
         loader = self.trn_loader if set_name == "Training" else self.val_loader
@@ -77,7 +72,8 @@ class Trainer1:
         self.eeg_enc.train()
         self.img_enc.train()
         self.lat_dec.train()
-        self.optimizer.zero_grad()
+        op = self.opi if self.freeze_eeg_enc is True else self.ope
+        op.zero_grad()
         eeg, ein, img = batch
         eeg = eeg.to(self.device).float()
         ein = ein.to(self.device).int()
@@ -101,13 +97,16 @@ class Trainer1:
                 )
         # NOTE: The coefficients can be in some other patterns also right now
         # weights of all scales are equal.
-        rec_scl_loss = sum(_rec_scl_loss.values()) / len(_rec_scl_loss)
+        ns = self.num_scales
+        weights = [(i + 1) / sum(range(1, ns + 1)) for i in range(ns)]
+        rec_scl_loss = sum(
+            wt * closs for wt, closs in zip(weights, _rec_scl_loss.values())
+        )
         # NOTE: Both losses are combined with a weighted sum
-        lamb = self.lambda_wt
+        lamb = self.lambda_wt(engine.state.iteration)
         loss = lamb * cos_sim_loss + 2 * (1 - lamb) * rec_scl_loss
         loss.backward()
-        self.optimizer.step()
-        self.lambda_wt.data.clamp_(0.1, 0.9)
+        op.step()
         return {
             "cos_sim_loss": cos_sim_loss.item(),
             "rec_scl_loss": rec_scl_loss.item(),
@@ -138,15 +137,20 @@ class Trainer1:
                         F.interpolate(p_img, scale_factor=sf, mode="bilinear"),
                         F.interpolate(img, scale_factor=sf, mode="bilinear"),
                     )
-            rec_scl_loss = sum(_rec_scl_loss.values()) / len(_rec_scl_loss)
-            lamb = self.lambda_wt
-            loss = lamb * cos_sim_loss + 2 * (1 - lamb) * rec_scl_loss
-            return {
-                "cos_sim_loss": cos_sim_loss.item(),
-                "rec_scl_loss": rec_scl_loss.item(),
-                "loss": loss.item(),
-                **{key: value.item() for key, value in _rec_scl_loss.items()},
-            }
+            ns = self.num_scales
+            weights = [(i + 1) / sum(range(1, ns + 1)) for i in range(ns)]
+            rec_scl_loss = sum(
+                wt * closs for wt, closs in zip(weights, _rec_scl_loss.values())
+            )
+        return {
+            "cos_sim_loss": cos_sim_loss.item(),
+            "rec_scl_loss": rec_scl_loss.item(),
+            **{key: value.item() for key, value in _rec_scl_loss.items()},
+        }
+
+    def lambda_wt(self, iteration):
+        i, f = iteration, self.fbsi
+        return 0.1 + 0.8 * (math.sin((i / f) * math.pi - (math.pi / 2)) + 1) / 2
 
     def fire(
         self,
@@ -155,6 +159,11 @@ class Trainer1:
         log_dir="logs",
         branch_switch_interval=128,
     ):
+        # NOTE: At the start, EEG encoder is frozen and Image encoder is not.
+        self.freeze_eeg_enc = True
+        self.freeze_img_enc = False
+        self.freeze_lat_dec = False
+        self.fbsi = branch_switch_interval
         trainer = Engine(self._train_step)
         evaluator = Engine(self._eval_step)
         tpbar = ProgressBar()
@@ -180,9 +189,8 @@ class Trainer1:
 
         @trainer.on(Events.ITERATION_COMPLETED)
         def _log_lambda_wt(engine):
-            tb_logger.writer.add_scalar(
-                "Lambda", self.lambda_wt.item(), engine.state.iteration
-            )
+            i = engine.state.iteration
+            tb_logger.writer.add_scalar("Lambda", self.lambda_wt(i), i)
 
         @trainer.on(Events.EPOCH_COMPLETED)
         def _run_evaluator(engine):
@@ -228,7 +236,8 @@ class Trainer1:
                 "eeg_enc": self.eeg_enc,
                 "img_enc": self.img_enc,
                 "lat_dec": self.lat_dec,
-                "optimizer": self.optimizer,
+                "optim_eeg": self.ope,
+                "optim_img": self.opi,
             },
         )
 
