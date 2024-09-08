@@ -1,3 +1,8 @@
 from . import brain, image
-from .brain import GATEncoder
-from .image import GenericImageEncoder, GenericLatentDecoder
+from .brain import GATEncoder, EEGEncoderSimple
+from .image import (
+    GenericImageEncoder,
+    GenericLatentDecoder,
+    GenericImageEncoder1,
+    GenericLatentDecoder1,
+)
