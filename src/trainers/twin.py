@@ -39,9 +39,11 @@ class Trainer1:
         self.freeze_lat_dec = freeze_lat_dec
         self.num_scales = num_scales
         self.device = device
-        self.ope = Adam(list(eeg_enc.parameters()) + list(lat_dec.parameters()))
+        self.ope = Adam(list(eeg_enc.parameters()))
         self.opi = Adam(list(img_enc.parameters()) + list(lat_dec.parameters()))
         self.fbsi = None
+        self.celoss = float("inf")
+        self.curr_eval_branch = None
 
     def _log_images(self, engine, tb_logger, set_name):
         loader = self.trn_loader if set_name == "Training" else self.val_loader
@@ -63,6 +65,7 @@ class Trainer1:
         )
 
     def _train_step(self, engine, batch):
+        branch = "I" if self.freeze_eeg_enc is True else "E"
         for param in self.eeg_enc.parameters():
             param.requires_grad = not self.freeze_eeg_enc
         for param in self.img_enc.parameters():
@@ -108,10 +111,10 @@ class Trainer1:
         loss.backward()
         op.step()
         return {
-            "cos_sim_loss": cos_sim_loss.item(),
-            "rec_scl_loss": rec_scl_loss.item(),
-            "loss": loss.item(),
-            **{key: value.item() for key, value in _rec_scl_loss.items()},
+            f"{branch}/cos_sim_loss": cos_sim_loss.item(),
+            f"{branch}/rec_scl_loss": rec_scl_loss.item(),
+            f"{branch}/loss": loss.item(),
+            **{f"{branch}/{k}": v.item() for k, v in _rec_scl_loss.items()},
         }
 
     def _eval_step(self, engine, batch):
@@ -125,7 +128,11 @@ class Trainer1:
             img = img.to(self.device).float()
             eeg_emb = self.eeg_enc(eeg, ein)
             img_emb = self.img_enc(img)
-            p_img = self.lat_dec(eeg_emb)
+            branch = self.curr_eval_branch
+            if branch == "I":
+                p_img = self.lat_dec(img_emb)
+            else:
+                p_img = self.lat_dec(eeg_emb)
             cos_sim_loss = 1 - F.cosine_similarity(eeg_emb, img_emb).mean()
             _rec_scl_loss = {}
             for i in range(self.num_scales):
@@ -142,15 +149,16 @@ class Trainer1:
             rec_scl_loss = sum(
                 wt * closs for wt, closs in zip(weights, _rec_scl_loss.values())
             )
+            lamb = 0.1 if branch == "I" else 0.9
+            loss = lamb * cos_sim_loss + 2 * (1 - lamb) * rec_scl_loss
         return {
-            "cos_sim_loss": cos_sim_loss.item(),
-            "rec_scl_loss": rec_scl_loss.item(),
-            **{key: value.item() for key, value in _rec_scl_loss.items()},
+            f"{branch}/cos_sim_loss": cos_sim_loss.item(),
+            f"{branch}/rec_scl_loss": rec_scl_loss.item(),
+            f"{branch}/loss": loss.item(),
+            **{f"{branch}/{k}": v.item() for k, v in _rec_scl_loss.items()},
         }
 
     def lambda_wt(self, iteration):
-        # i, f = iteration, self.fbsi
-        # return 0.1 + 0.8 * (math.sin((i / f) * math.pi - (math.pi / 2)) + 1) / 2
         if self.freeze_eeg_enc is True:
             return 0.1
         else:
@@ -198,22 +206,29 @@ class Trainer1:
 
         @trainer.on(Events.EPOCH_COMPLETED)
         def _run_evaluator(engine):
-            k = engine.state.output.keys()
-            avmetrics = {key: [] for key in k if key != "loss"}
+            ky = [k.split("/")[1] for k in engine.state.output.keys()]
+            avmetrics = {f"E/{k}": [] for k in ky} | {f"I/{k}": [] for k in ky}
+
             for batch in self.val_loader:
                 eeg, ein, img = batch
                 eeg = eeg.to(self.device).float()
                 ein = ein.to(self.device).int()
                 img = img.to(self.device).float()
-                batch_metrics = self._eval_step(engine, (eeg, ein, img))
-                for key, value in batch_metrics.items():
+                self.curr_eval_branch = "I"
+                batch_metrics_i = self._eval_step(engine, (eeg, ein, img))
+                self.curr_eval_branch = "E"
+                batch_metrics_e = self._eval_step(engine, (eeg, ein, img))
+                self.celoss = batch_metrics_e["E/loss"]
+                for key, value in batch_metrics_i.items():
+                    avmetrics[key].append(value)
+                for key, value in batch_metrics_e.items():
                     avmetrics[key].append(value)
             avmetrics = {
                 key: sum(value) / len(value) for key, value in avmetrics.items()
             }
             for key, value in avmetrics.items():
                 tb_logger.writer.add_scalar(
-                    f"validation/{key}", value, engine.state.iteration
+                    f"validation/{key}", value, engine.state.epoch
                 )
 
             self._log_images(engine, tb_logger, "Validation")
@@ -223,18 +238,20 @@ class Trainer1:
             if self.freeze_eeg_enc is True:
                 self.freeze_eeg_enc = False
                 self.freeze_img_enc = True
+                self.freeze_lat_dec = True
             else:
                 self.freeze_eeg_enc = True
                 self.freeze_img_enc = False
+                self.freeze_lat_dec = False
 
         checkpoint_handler = ModelCheckpoint(
             log_dir,
-            n_saved=10,
+            n_saved=1,
             require_empty=False,
-            score_function=lambda engine: -engine.state.output["loss"],
+            score_function=lambda _: -self.celoss,
         )
 
-        evaluator.add_event_handler(
+        trainer.add_event_handler(
             Events.EPOCH_COMPLETED,
             checkpoint_handler,
             {

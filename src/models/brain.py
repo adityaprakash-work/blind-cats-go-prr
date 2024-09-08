@@ -75,3 +75,65 @@ class GATEncoder(pt.nn.Module):
         for i, (x_, edge_index_) in enumerate(zip(x, edge_index)):
             output[i] = self._forward(x_, edge_index_)
         return output
+
+
+class EEGEncoderSimple(pt.nn.Module):
+    def __init__(
+        self,
+        eeg_shape: tuple[int, int],
+        outc1: int = 128,
+        outc2: int = 32,
+        lat_dim: int = 1024,
+    ):
+        super(EEGEncoderSimple, self).__init__()
+        nec = eeg_shape[0]
+        row = pt.arange(nec).view(-1, 1).repeat(1, nec).view(-1)
+        col = pt.arange(nec).view(-1, 1).repeat(nec, 1).view(-1)
+        self.eins = pt.stack([row, col], dim=0)
+        self.conv_spat = ptg.nn.GATv2Conv(
+            in_channels=-1,
+            out_channels=outc1,
+            heads=4,
+            dropout=0.1,
+            concat=False,
+        )
+
+        row = pt.arange(outc1).view(-1, 1).repeat(1, outc1).view(-1)
+        col = pt.arange(outc1).view(-1, 1).repeat(outc1, 1).view(-1)
+        self.eint = pt.stack([row, col], dim=0)
+        self.conv_temp = ptg.nn.GATv2Conv(
+            in_channels=-1,
+            out_channels=outc2,
+            heads=4,
+            dropout=0.1,
+            concat=False,
+        )
+        self.lat_dim = lat_dim
+
+        self.fc1 = pt.nn.Linear(outc1 * outc2, lat_dim)
+        self.fc2 = pt.nn.Linear(lat_dim, lat_dim)
+        self.fc3 = pt.nn.Linear(lat_dim, lat_dim)
+        self.fc4 = pt.nn.Linear(lat_dim, lat_dim)
+        self.act_fn = pt.nn.GELU()
+
+    def _forward(self, x: pt.Tensor) -> pt.Tensor:
+        x = self.conv_spat(x, self.eins)
+        x = x.T
+        x = self.conv_temp(x, self.eint)
+        x = x.view(-1)
+        x = self.fc1(x)
+        xr = self.act_fn(x)
+        x = self.fc2(xr)
+        x = self.act_fn(x)
+        x = self.fc3(x)
+        x = x + xr
+        x = self.fc4(x)
+        x = self.act_fn(x)
+        return x
+
+    def forward(self, x: pt.Tensor) -> pt.Tensor:
+        out = pt.empty(x.size(0), self.lat_dim)
+        print(out.shape)
+        for i in range(x.size(0)):
+            out[i] = self._forward(x[i])
+        return out
