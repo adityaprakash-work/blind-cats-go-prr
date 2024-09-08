@@ -149,8 +149,12 @@ class Trainer1:
         }
 
     def lambda_wt(self, iteration):
-        i, f = iteration, self.fbsi
-        return 0.1 + 0.8 * (math.sin((i / f) * math.pi - (math.pi / 2)) + 1) / 2
+        # i, f = iteration, self.fbsi
+        # return 0.1 + 0.8 * (math.sin((i / f) * math.pi - (math.pi / 2)) + 1) / 2
+        if self.freeze_eeg_enc is True:
+            return 0.1
+        else:
+            return 0.9
 
     def fire(
         self,
