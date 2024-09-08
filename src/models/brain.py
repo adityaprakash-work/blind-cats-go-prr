@@ -84,6 +84,7 @@ class EEGEncoderSimple(pt.nn.Module):
         outc1: int = 128,
         outc2: int = 32,
         lat_dim: int = 1024,
+        device: str = "cuda",
     ):
         super(EEGEncoderSimple, self).__init__()
         nec = eeg_shape[0]
@@ -137,3 +138,9 @@ class EEGEncoderSimple(pt.nn.Module):
         for i in range(x.size(0)):
             out[i] = self._forward(x[i])
         return out
+
+    def to(self, *args, **kwargs):
+        model = super(EEGEncoderSimple, self).to(*args, **kwargs)
+        self.eint = self.eint.to(*args, **kwargs)
+        self.eins = self.eins.to(*args, **kwargs)
+        return model
