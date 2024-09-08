@@ -134,7 +134,6 @@ class EEGEncoderSimple(pt.nn.Module):
 
     def forward(self, x: pt.Tensor, ein: pt.Tensor) -> pt.Tensor:
         out = pt.empty(x.size(0), self.lat_dim, device=x.device)
-        print(out.shape)
         for i in range(x.size(0)):
             out[i] = self._forward(x[i])
         return out
