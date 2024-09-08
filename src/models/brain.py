@@ -131,7 +131,7 @@ class EEGEncoderSimple(pt.nn.Module):
         x = self.act_fn(x)
         return x
 
-    def forward(self, x: pt.Tensor) -> pt.Tensor:
+    def forward(self, x: pt.Tensor, ein: pt.Tensor) -> pt.Tensor:
         out = pt.empty(x.size(0), self.lat_dim)
         print(out.shape)
         for i in range(x.size(0)):
