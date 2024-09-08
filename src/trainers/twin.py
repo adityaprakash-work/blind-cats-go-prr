@@ -198,7 +198,8 @@ class Trainer1:
 
         @trainer.on(Events.EPOCH_COMPLETED)
         def _run_evaluator(engine):
-            avmetrics = {key: [] for key in engine.state.output.keys()}
+            k = engine.state.output.keys()
+            avmetrics = {key: [] for key in k if key != "loss"}
             for batch in self.val_loader:
                 eeg, ein, img = batch
                 eeg = eeg.to(self.device).float()
