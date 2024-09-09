@@ -109,7 +109,7 @@ class Trainer1:
         # NOTE: Both losses are combined with a weighted sum.
         # NOTE: The factor '100'is empirical.
         lamb = self.lambda_wt(engine.state.iteration)
-        loss = lamb * cos_sim_loss + 100 * (1 - lamb) * rec_scl_loss
+        loss = lamb * cos_sim_loss + 10 * (1 - lamb) * rec_scl_loss
         loss.backward()
         op.step()
         return {
@@ -151,8 +151,8 @@ class Trainer1:
             rec_scl_loss = sum(
                 wt * closs for wt, closs in zip(weights, _rec_scl_loss.values())
             )
-            lamb = 0.1 if branch == "I" else 0.9
-            loss = lamb * cos_sim_loss + 100 * (1 - lamb) * rec_scl_loss
+            lamb = 0.0 if branch == "I" else 1.0
+            loss = lamb * cos_sim_loss + 10 * (1 - lamb) * rec_scl_loss
         return {
             f"{branch}/cos_sim_loss": cos_sim_loss.item(),
             f"{branch}/rec_scl_loss": rec_scl_loss.item(),

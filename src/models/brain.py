@@ -114,8 +114,8 @@ class EEGEncoderSimple(pt.nn.Module):
         self.fc1 = pt.nn.Linear(outc1 * outc2, lat_dim)
         self.fc2 = pt.nn.Linear(lat_dim, lat_dim)
         self.fc3 = pt.nn.Linear(lat_dim, lat_dim)
-        self.act_fn = pt.nn.GELU()
-        self.fin_ac = pt.nn.Tanh()
+        self.act_fn = pt.nn.LeakyReLU()
+        self.fin_ac = pt.nn.LeakyReLU()
 
     def _forward(self, x: pt.Tensor) -> pt.Tensor:
         x = self.conv_spat(x, self.eins)

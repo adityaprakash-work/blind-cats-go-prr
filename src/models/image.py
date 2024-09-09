@@ -170,7 +170,7 @@ class GenericLatentDecoder1(pt.nn.Module):
                 padding=1,
                 stride=2,
             ),
-            pt.nn.Tanh(),
+            pt.nn.LeakyReLU(),
         )
 
     def forward(self, x):
