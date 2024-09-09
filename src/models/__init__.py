@@ -5,4 +5,5 @@ from .image import (
     GenericLatentDecoder,
     GenericImageEncoder1,
     GenericLatentDecoder1,
+    EEGChannelNet,
 )
