@@ -161,7 +161,7 @@ class EEGChannelNet(pt.nn.Module):
                         padding=(0, p),
                     ),
                     pt.nn.BatchNorm2d(10),
-                    pt.nn.ReLU(),
+                    pt.nn.GELU(),
                 )
                 for d, p in zip(temp_dil, temp_pad)
             ]
@@ -180,7 +180,7 @@ class EEGChannelNet(pt.nn.Module):
                         padding=(p, 0),
                     ),
                     pt.nn.BatchNorm2d(50),
-                    pt.nn.ReLU(),
+                    pt.nn.GELU(),
                 )
                 for k, p in zip(spat_krn, spat_pad)
             ]
@@ -197,7 +197,7 @@ class EEGChannelNet(pt.nn.Module):
                         padding=(1, 1),
                     ),
                     pt.nn.BatchNorm2d(200),
-                    pt.nn.ReLU(),
+                    pt.nn.GELU(),
                     pt.nn.Conv2d(
                         in_channels=200,
                         out_channels=200,
@@ -208,7 +208,7 @@ class EEGChannelNet(pt.nn.Module):
                     ),
                     pt.nn.BatchNorm2d(200),
                 )
-                for _ in range(4)
+                for _ in range(2)
             ]
         )
         self.stride_layers = pt.nn.ModuleList(
@@ -223,22 +223,26 @@ class EEGChannelNet(pt.nn.Module):
                         padding=(1, 1),
                     ),
                     pt.nn.BatchNorm2d(200),
-                    pt.nn.ReLU(),
+                    pt.nn.GELU(),
                 )
-                for _ in range(4)
+                for _ in range(2)
             ]
         )
-        self.act = pt.nn.ReLU()
-        self.fin_act = pt.nn.LeakyReLU()
-        self.fin_conv = pt.nn.Conv2d(
-            in_channels=200,
-            out_channels=50,
-            kernel_size=(3, 3),
-            stride=(1, 1),
-            padding=(0, 0),
+        self.act1 = pt.nn.GELU()
+        self.act2 = pt.nn.LeakyReLU()
+        self.fin_conv = pt.nn.Sequential(
+            pt.nn.Conv2d(
+                in_channels=200,
+                out_channels=10,
+                kernel_size=(3, 3),
+                stride=(1, 1),
+                padding=(0, 0),
+            ),
+            pt.nn.BatchNorm2d(10),
+            pt.nn.GELU(),
         )
-        self.fc1 = pt.nn.Linear(50 * 2 * 13, latent_dim)
-        self.fc2 = pt.nn.Linear(latent_dim, latent_dim) 
+        self.fc1 = pt.nn.Linear(7700, latent_dim)
+        self.fc2 = pt.nn.Linear(latent_dim, latent_dim)
 
     def forward(self, x, ein):
         x = x.unsqueeze(1)
@@ -247,12 +251,12 @@ class EEGChannelNet(pt.nn.Module):
         spat_feat = [conv(x) for conv in self.spat_block]
         x = pt.cat(spat_feat, dim=1)
         for res, stride in zip(self.res_blocks, self.stride_layers):
-            x = self.act(res(x) + x)
+            x = self.act1(res(x) + x)
             x = stride(x)
         x = self.fin_conv(x)
         x = x.view(x.size(0), -1)
         x = self.fc1(x)
-        x = self.fin_act(x)
-        x = self.fc2(x) 
-        x = self.fin_act(x) 
+        x = self.act2(x)
+        x = self.fc2(x)
+        x = self.act2(x)
         return x
