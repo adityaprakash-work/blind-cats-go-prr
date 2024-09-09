@@ -142,3 +142,113 @@ class EEGEncoderSimple(pt.nn.Module):
         self.eint = self.eint.to(*args, **kwargs)
         self.eins = self.eins.to(*args, **kwargs)
         return model
+
+
+class EEGChannelNet(pt.nn.Module):
+    def __init__(self, latent_dim=1024):
+        super(EEGChannelNet, self).__init__()
+        temp_dil = [1, 2, 4, 8, 16]
+        temp_pad = [16, 32, 64, 128, 256]
+        self.temp_block = pt.nn.ModuleList(
+            [
+                pt.nn.Sequential(
+                    pt.nn.Conv2d(
+                        in_channels=1,
+                        out_channels=10,
+                        kernel_size=(1, 33),
+                        stride=(1, 2),
+                        dilation=(1, d),
+                        padding=(0, p),
+                    ),
+                    pt.nn.BatchNorm2d(10),
+                    pt.nn.ReLU(),
+                )
+                for d, p in zip(temp_dil, temp_pad)
+            ]
+        )
+        spat_krn = [128, 64, 32, 16]
+        spat_pad = [63, 31, 15, 7]
+        self.spat_block = pt.nn.ModuleList(
+            [
+                pt.nn.Sequential(
+                    pt.nn.Conv2d(
+                        in_channels=50,
+                        out_channels=50,
+                        kernel_size=(k, 1),
+                        stride=(2, 1),
+                        dilation=(1, 1),
+                        padding=(p, 0),
+                    ),
+                    pt.nn.BatchNorm2d(50),
+                    pt.nn.ReLU(),
+                )
+                for k, p in zip(spat_krn, spat_pad)
+            ]
+        )
+        self.res_blocks = pt.nn.ModuleList(
+            [
+                pt.nn.Sequential(
+                    pt.nn.Conv2d(
+                        in_channels=200,
+                        out_channels=200,
+                        kernel_size=(3, 3),
+                        stride=(1, 1),
+                        dilation=(1, 1),
+                        padding=(1, 1),
+                    ),
+                    pt.nn.BatchNorm2d(200),
+                    pt.nn.ReLU(),
+                    pt.nn.Conv2d(
+                        in_channels=200,
+                        out_channels=200,
+                        kernel_size=(3, 3),
+                        stride=(1, 1),
+                        dilation=(1, 1),
+                        padding=(1, 1),
+                    ),
+                    pt.nn.BatchNorm2d(200),
+                )
+                for _ in range(4)
+            ]
+        )
+        self.stride_layers = pt.nn.ModuleList(
+            [
+                pt.nn.Sequential(
+                    pt.nn.Conv2d(
+                        in_channels=200,
+                        out_channels=200,
+                        kernel_size=(3, 3),
+                        stride=(2, 2),
+                        dilation=(1, 1),
+                        padding=(1, 1),
+                    ),
+                    pt.nn.BatchNorm2d(200),
+                    pt.nn.ReLU(),
+                )
+                for _ in range(4)
+            ]
+        )
+        self.act = pt.nn.ReLU()
+        self.fin_act = pt.nn.LeakyReLU()
+        self.fin_conv = pt.nn.Conv2d(
+            in_channels=200,
+            out_channels=50,
+            kernel_size=(3, 3),
+            stride=(1, 1),
+            padding=(0, 0),
+        )
+        self.fc = pt.nn.Linear(50 * 2 * 13, latent_dim)
+
+    def forward(self, x):
+        temp_feat = [conv(x) for conv in self.temp_block]
+        x = pt.cat(temp_feat, dim=1)
+        spat_feat = [conv(x) for conv in self.spat_block]
+        x = pt.cat(spat_feat, dim=1)
+        for res, stride in zip(self.res_blocks, self.stride_layers):
+            x = self.act(res(x) + x)
+            x = stride(x)
+        x = self.fin_conv(x)
+        x = x.view(x.size(0), -1)
+        x = self.fc(x)
+        x = self.fin_act(x)
+        return x
