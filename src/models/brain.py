@@ -237,7 +237,8 @@ class EEGChannelNet(pt.nn.Module):
             stride=(1, 1),
             padding=(0, 0),
         )
-        self.fc = pt.nn.Linear(50 * 2 * 13, latent_dim)
+        self.fc1 = pt.nn.Linear(50 * 2 * 13, latent_dim)
+        self.fc2 = pt.nn.Linear(latent_dim, latent_dim) 
 
     def forward(self, x):
         temp_feat = [conv(x) for conv in self.temp_block]
@@ -249,6 +250,8 @@ class EEGChannelNet(pt.nn.Module):
             x = stride(x)
         x = self.fin_conv(x)
         x = x.view(x.size(0), -1)
-        x = self.fc(x)
+        x = self.fc1(x)
         x = self.fin_act(x)
+        x = self.fc2(x) 
+        x = selr.fin_act(x) 
         return x
