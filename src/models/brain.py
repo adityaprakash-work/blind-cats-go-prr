@@ -241,7 +241,7 @@ class EEGChannelNet(pt.nn.Module):
         self.fc2 = pt.nn.Linear(latent_dim, latent_dim) 
 
     def forward(self, x, ein):
-        x = x.unsqueeze(0)
+        x = x.unsqueeze(1)
         temp_feat = [conv(x) for conv in self.temp_block]
         x = pt.cat(temp_feat, dim=1)
         spat_feat = [conv(x) for conv in self.spat_block]
