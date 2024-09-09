@@ -114,8 +114,8 @@ class EEGEncoderSimple(pt.nn.Module):
         self.fc1 = pt.nn.Linear(outc1 * outc2, lat_dim)
         self.fc2 = pt.nn.Linear(lat_dim, lat_dim)
         self.fc3 = pt.nn.Linear(lat_dim, lat_dim)
-        self.fc4 = pt.nn.Linear(lat_dim, lat_dim)
         self.act_fn = pt.nn.GELU()
+        self.fin_ac = pt.nn.Tanh()
 
     def _forward(self, x: pt.Tensor) -> pt.Tensor:
         x = self.conv_spat(x, self.eins)
@@ -125,11 +125,10 @@ class EEGEncoderSimple(pt.nn.Module):
         x = self.fc1(x)
         xr = self.act_fn(x)
         x = self.fc2(xr)
-        x = self.act_fn(x)
-        x = self.fc3(x)
         x = x + xr
-        x = self.fc4(x)
+        x = self.fc3(x)
         x = self.act_fn(x)
+        x = self.fin_ac(x)
         return x
 
     def forward(self, x: pt.Tensor, ein: pt.Tensor) -> pt.Tensor:

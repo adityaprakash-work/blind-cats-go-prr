@@ -44,6 +44,7 @@ class Trainer1:
         self.fbsi = None
         self.celoss = float("inf")
         self.curr_eval_branch = None
+        self.lambda_bounds = (0.0, 1.0)
 
     def _log_images(self, engine, tb_logger, set_name):
         loader = self.trn_loader if set_name == "Training" else self.val_loader
@@ -105,9 +106,10 @@ class Trainer1:
         rec_scl_loss = sum(
             wt * closs for wt, closs in zip(weights, _rec_scl_loss.values())
         )
-        # NOTE: Both losses are combined with a weighted sum
+        # NOTE: Both losses are combined with a weighted sum.
+        # NOTE: The factor '100'is empirical.
         lamb = self.lambda_wt(engine.state.iteration)
-        loss = lamb * cos_sim_loss + 2 * (1 - lamb) * rec_scl_loss
+        loss = lamb * cos_sim_loss + 100 * (1 - lamb) * rec_scl_loss
         loss.backward()
         op.step()
         return {
@@ -150,7 +152,7 @@ class Trainer1:
                 wt * closs for wt, closs in zip(weights, _rec_scl_loss.values())
             )
             lamb = 0.1 if branch == "I" else 0.9
-            loss = lamb * cos_sim_loss + 2 * (1 - lamb) * rec_scl_loss
+            loss = lamb * cos_sim_loss + 100 * (1 - lamb) * rec_scl_loss
         return {
             f"{branch}/cos_sim_loss": cos_sim_loss.item(),
             f"{branch}/rec_scl_loss": rec_scl_loss.item(),
@@ -160,9 +162,9 @@ class Trainer1:
 
     def lambda_wt(self, iteration):
         if self.freeze_eeg_enc is True:
-            return 0.1
+            return self.lambda_bounds[0]
         else:
-            return 0.9
+            return self.lambda_bounds[1]
 
     def fire(
         self,
@@ -170,7 +172,9 @@ class Trainer1:
         log_rec_interval=16,
         log_dir="logs",
         branch_switch_interval=128,
+        lambda_bounds=(0.0, 1.0),
     ):
+        self.lambda_bounds = lambda_bounds
         # NOTE: At the start, EEG encoder is frozen and Image encoder is not.
         self.freeze_eeg_enc = True
         self.freeze_img_enc = False
