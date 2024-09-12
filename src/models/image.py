@@ -118,7 +118,6 @@ class GenericImageEncoder1(pt.nn.Module):
             act_fn(),
             pt.nn.Flatten(),
             pt.nn.Linear(2 * c_hid * 16 * 16, latent_dim),
-            pt.nn.LeakyReLU(),
         )
 
     def forward(self, x):
@@ -179,3 +178,48 @@ class GenericLatentDecoder1(pt.nn.Module):
         x = self.net(x)
         x = x / 2 + 0.5
         return x
+
+
+class VariationalGenericImageEncoder1(pt.nn.Module):
+    def __init__(
+        self,
+        num_input_channels: int = 1,
+        base_channel_size: int = 32,
+        latent_dim: int = 1024,
+        act_fn: object = pt.nn.GELU,
+    ):
+        super().__init__()
+        c_hid = base_channel_size
+        self.net = pt.nn.Sequential(
+            pt.nn.Conv2d(
+                num_input_channels,
+                c_hid,
+                kernel_size=3,
+                padding=1,
+                stride=2,
+            ),
+            act_fn(),
+            pt.nn.Conv2d(c_hid, c_hid, kernel_size=3, padding=1),
+            act_fn(),
+            pt.nn.Conv2d(c_hid, 2 * c_hid, kernel_size=3, padding=1, stride=2),
+            act_fn(),
+            pt.nn.Conv2d(2 * c_hid, 2 * c_hid, kernel_size=3, padding=1),
+            act_fn(),
+            pt.nn.Conv2d(
+                2 * c_hid,
+                2 * c_hid,
+                kernel_size=3,
+                padding=1,
+                stride=2,
+            ),
+            act_fn(),
+            pt.nn.Flatten(),
+            pt.nn.Linear(2 * c_hid * 16 * 16, 4 * latent_dim),
+            act_fn(),
+            pt.nn.Linear(4 * latent_dim, 2 * latent_dim),
+        )
+
+    def forward(self, x):
+        x = self.net(x)
+        mu, logvar = x.chunk(2, dim=-1)
+        return mu, logvar

@@ -1,4 +1,6 @@
 import math
+import wandb
+import numpy as np
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -9,7 +11,9 @@ from ignite.handlers import (
     TensorboardLogger,
     ProgressBar,
 )
+from ignite.contrib.handlers import WandBLogger
 from ignite.contrib.handlers.tensorboard_logger import OutputHandler
+from ..losses import StochasticPatchMSELoss
 
 
 class Trainer1:
@@ -274,3 +278,262 @@ class Trainer1:
             "img_enc": self.img_enc,
             "lat_dec": self.lat_dec,
         }
+
+
+class KaggleTwinTrainer:
+    def __init__(
+        self,
+        eeg_enc,
+        img_enc,
+        lat_dec,
+    ):
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        self.eeg_enc = eeg_enc
+        self.img_enc = img_enc
+        self.lat_dec = lat_dec
+        self.eeg_enc.to(self.device)
+        self.img_enc.to(self.device)
+        self.lat_dec.to(self.device)
+        self.ope = Adam(eeg_enc.parameters())
+        self.opi = Adam(list(img_enc.parameters()) + list(lat_dec.parameters()))
+        self.spl_e = StochasticPatchMSELoss(16)
+        self.spl_i = StochasticPatchMSELoss(16)
+        self.trn_eng_e = None
+        self.evl_eng_e = None
+        self.trn_eng_i = None
+        self.evl_eng_i = None
+
+    def _train_step_e(self, engine, batch):
+        for param in self.eeg_enc.parameters():
+            param.requires_grad = True
+        for param in self.img_enc.parameters():
+            param.requires_grad = False
+        for param in self.lat_dec.parameters():
+            param.requires_grad = False
+        # NOTE: The other models can be set to `eval` mode if needed in other
+        # architectures.
+        self.eeg_enc.train()
+
+        self.ope.zero_grad()
+
+        eeg, img = batch
+        eeg = eeg.to(self.device).float()
+        img = img.to(self.device).float()
+        eeg_emb = self.eeg_enc(eeg)
+        mu, logvar = self.img_enc(img)
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        img_emb = eps.mul(std).add_(mu)
+
+        cos_sim_loss = 1 - F.cosine_similarity(eeg_emb, img_emb).mean()
+        p_img = self.lat_dec(eeg_emb)
+        # TODO: Multi-scale weighted loss can be added here.
+        rec_loss = self.spl_e(img, p_img)
+
+        loss = cos_sim_loss + rec_loss
+        loss.backward()
+
+        self.ope.step()
+
+        return {
+            "E/cos_sim_loss": cos_sim_loss.item(),
+            "E/rec_loss": rec_loss.item(),
+            "E/loss": loss.item(),
+        }
+
+    def _eval_step_e(self, engine, batch):
+        self.eeg_enc.eval()
+        self.img_enc.eval()
+        self.lat_dec.eval()
+        with torch.no_grad():
+            eeg, img = batch
+            eeg = eeg.to(self.device).float()
+            img = img.to(self.device).float()
+            eeg_emb = self.eeg_enc(eeg)
+            mu, logvar = self.img_enc(img)
+            std = torch.exp(0.5 * logvar)
+            eps = torch.randn_like(std)
+            img_emb = eps.mul(std).add_(mu)
+
+            cos_sim_loss = 1 - F.cosine_similarity(eeg_emb, img_emb).mean()
+            p_img = self.lat_dec(eeg_emb)
+            rec_loss = self.spl_e(img, p_img)
+
+            loss = cos_sim_loss + rec_loss
+
+        return {
+            "E/cos_sim_loss": cos_sim_loss.item(),
+            "E/rec_loss": rec_loss.item(),
+            "E/loss": loss.item(),
+        }
+
+    def _train_step_i(self, engine, batch):
+        for param in self.img_enc.parameters():
+            param.requires_grad = True
+        for param in self.lat_dec.parameters():
+            param.requires_grad = True
+        self.img_enc.train()
+        self.lat_dec.train()
+
+        self.opi.zero_grad()
+
+        _, img = batch
+        img = img.to(self.device).float()
+        mu, logvar = self.img_enc(img)
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        img_emb = eps.mul(std).add_(mu)
+        p_img = self.lat_dec(img_emb)
+        rec_loss = self.spl_i(img, p_img)
+        kld_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+
+        loss = rec_loss + kld_loss
+        loss.backward()
+
+        self.opi.step()
+
+        return {
+            "I/rec_loss": rec_loss.item(),
+            "I/kld_loss": kld_loss.item(),
+            "I/loss": loss.item(),
+        }
+
+    def _eval_step_i(self, engine, batch):
+        self.eeg_enc.eval()
+        self.img_enc.eval()
+        self.lat_dec.eval()
+        with torch.no_grad():
+            _, img = batch
+            img = img.to(self.device).float()
+            mu, logvar = self.img_enc(img)
+            std = torch.exp(0.5 * logvar)
+            eps = torch.randn_like(std)
+            img_emb = eps.mul(std).add_(mu)
+            p_img = self.lat_dec(img_emb)
+            rec_loss = self.spl_i(img, p_img)
+            kld_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp())
+
+            loss = rec_loss + kld_loss
+
+        return {
+            "I/rec_loss": rec_loss.item(),
+            "I/kld_loss": kld_loss.item(),
+            "I/loss": loss.item(),
+        }
+
+    # TODO: Merge the two `fire` methods into one.
+    def fire_e(
+        self,
+        trn_loader,
+        val_loader,
+        max_epochs=10,
+        patch_size=16,
+        refesh_engines=False,
+        wb_name="epoch-m-n",
+        wb_group="eeg-branch",
+        wb_project="blind-cats-go-prr",
+    ):
+        self.spl_e = StochasticPatchMSELoss(patch_size)
+        if refesh_engines:
+            self.trn_eng_e = Engine(self._train_step_e)
+            self.evl_eng_e = Engine(self._eval_step_e)
+            tpbar = ProgressBar()
+            epbar = ProgressBar()
+            tpbar.attach(self.trn_eng_e)
+            epbar.attach(self.evl_eng_e)
+            wandb_logger = WandBLogger(
+                name=wb_name,
+                project=wb_project,
+                group=wb_group,
+            )
+            wandb_logger.attach_output_handler(
+                self.trn_eng_e,
+                event_name=Events.ITERATION_COMPLETED,
+                tag="training",
+                output_transform=lambda x: x,
+            )
+
+            wandb_logger.attach_output_handler(
+                self.evl_eng_e,
+                event_name=Events.EPOCH_COMPLETED,
+                tag="evaluation",
+                output_transform=lambda x: x,
+                global_step_transform=lambda *_: self.trn_eng_e.state.iteration,
+            )
+
+            @self.trn_eng_e.on(Events.EPOCH_COMPLETED)
+            def _run_evaluator(engine):
+                self.evl_eng_e.run(val_loader)
+
+            @self.trn_eng_e.on(Events.ITERATION_COMPLETED(every=32))
+            def _log_images_trn(engine):
+                self._log_images(engine, trn_loader, "Training")
+
+            @self.evl_eng_e.on(Events.ITERATION_COMPLETED(every=32))
+            def _log_images_evl(engine):
+                self._log_images(engine, val_loader, "Validation")
+
+        self.trn_eng_e.run(trn_loader, max_epochs=max_epochs)
+
+    def fire_i(
+        self,
+        trn_loader,
+        val_loader,
+        max_epochs=10,
+        patch_size=16,
+        refesh_engines=False,
+        wb_name="epoch-m-n",
+        wb_group="img-branch",
+        wb_project="blind-cats-go-prr",
+    ):
+        self.spl_i = StochasticPatchMSELoss(patch_size)
+        if refesh_engines:
+            self.trn_eng_i = Engine(self._train_step_i)
+            self.evl_eng_i = Engine(self._eval_step_i)
+            tpbar = ProgressBar()
+            epbar = ProgressBar()
+            tpbar.attach(self.trn_eng_i)
+            epbar.attach(self.evl_eng_i)
+            wandb_logger = WandBLogger(
+                name=wb_name,
+                project=wb_project,
+                group=wb_group,
+            )
+            wandb_logger.attach_output_handler(
+                self.trn_eng_i,
+                event_name=Events.ITERATION_COMPLETED,
+                tag="training",
+                output_transform=lambda x: x,
+            )
+
+            wandb_logger.attach_output_handler(
+                self.evl_eng_i,
+                event_name=Events.EPOCH_COMPLETED,
+                tag="evaluation",
+                output_transform=lambda x: x,
+                global_step_transform=lambda *_: self.trn_eng_i.state.iteration,
+            )
+
+            @self.trn_eng_i.on(Events.EPOCH_COMPLETED)
+            def _run_evaluator(engine):
+                self.evl_eng_i.run(val_loader)
+
+        self.trn_eng_i.run(trn_loader, max_epochs=max_epochs)
+
+    def _log_images(self, engine, loader, set_name):
+        eeg, img = next(iter(loader))
+        eeg = eeg.to(self.device).float()
+        img = img.to(self.device).float()
+        eeg_emb = self.eeg_enc(eeg)
+        mu, logvar = self.img_enc(img)
+        std = torch.exp(0.5 * logvar)
+        eps = torch.randn_like(std)
+        img_emb = eps.mul(std).add_(mu)
+        p_img_e = self.lat_dec(eeg_emb)
+        p_img_i = self.lat_dec(img_emb)
+        img_grid = torch.cat((img, p_img_i, p_img_e), dim=3)
+        img_grid = img_grid.clamp(0, 1).detach().cpu().numpy()
+        iter_num = engine.state.iteration
+        wandb.log(
+            {f"{set_name} Set Reconstruction: {iter_num}": [wandb.Image(img_grid)]}
+        )
